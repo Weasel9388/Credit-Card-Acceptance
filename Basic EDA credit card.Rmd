@@ -1,0 +1,39 @@
+---
+title: "Credit Card Acceptance"
+author: "Wesley Nelson"
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+```{r packages, include=FALSE}
+library(readxl)
+library(DataExplorer)
+library(ggplot2)
+library(plotly)
+library(dplyr)
+```
+
+# Read in data and clean
+
+
+```{r read}
+
+
+credit_card <- read_excel("Credit Card Marketing Study Data.xlsx")
+
+clean_credit_card <- na.omit(credit_card)
+
+
+```
+
+#Basic EDA
+
+```{r EDA}
+
+income_hist <- geom_histogram(credit_card, aes(x = `Offer Accepted`, ))
+
+
+
+```
+
+
