@@ -1,0 +1,685 @@
+---
+title: "Credit Card Acceptance"
+author: "Wesley Nelson"
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+```{r packages, include=FALSE}
+library(readxl)
+library(DataExplorer)
+library(ggplot2)
+library(plotly)
+library(dplyr)
+library(caret)
+library(corrplot)
+library(tidyr)
+library(randomForest)
+library(ROCR)       # For ROC plots and evaluation metrics
+library(knitr)
+library(DT)
+```
+
+# Read in data and clean
+
+```{r read}
+
+credit_data <- read_excel("Credit Card Marketing Study Data.xlsx")
+
+# Rename columns to remove spaces and special characters
+names(credit_data) <- gsub(" ", "_", names(credit_data))
+names(credit_data) <- gsub("#", "Num", names(credit_data))
+names(credit_data) <- gsub("-", "_", names(credit_data))
+
+# Clean the data (remove missing values)
+credit_data_clean <- na.omit(credit_data)
+
+# Convert categorical variables to factors
+credit_data_clean$Offer_Accepted <- factor(credit_data_clean$Offer_Accepted, levels = c("No", "Yes"))
+credit_data_clean$Reward <- factor(credit_data_clean$Reward)
+credit_data_clean$Mailer_Type <- factor(credit_data_clean$Mailer_Type)
+credit_data_clean$Income_Level <- factor(credit_data_clean$Income_Level, levels = c("Low", "Medium", "High"))
+credit_data_clean$Overdraft_Protection <- factor(credit_data_clean$Overdraft_Protection)
+credit_data_clean$Credit_Rating <- factor(credit_data_clean$Credit_Rating, levels = c("Low", "Medium", "High"))
+credit_data_clean$Own_Your_Home <- factor(credit_data_clean$Own_Your_Home)
+
+# Summary of the cleaned data
+summary(credit_data_clean)
+
+```
+
+#Basic EDA
+
+```{r EDA}
+
+# Distribution of categorical variables
+
+# Acceptance rate
+acceptance_count <- table(credit_data_clean$Offer_Accepted)
+acceptance_percent <- prop.table(acceptance_count) * 100
+
+# Display acceptance rate in table format
+acceptance_table <- data.frame(
+  Category = names(acceptance_count),
+  Count = as.numeric(acceptance_count),
+  Percentage = round(as.numeric(acceptance_percent), 2)
+)
+
+# Print using kable
+kable(
+  acceptance_table,
+  col.names = c("Offer Accepted", "Count", "Percentage (%)"),
+  caption = "Credit Card Offer Acceptance Rate",
+  align = "c"
+)
+
+# Create a bar plot for acceptance rate
+barplot(acceptance_count, main="Credit Card Offer Acceptance", 
+        xlab="Offer Accepted", ylab="Count", col=c("lightblue", "salmon"))
+
+# Define categorical variables
+cat_vars <- c("Reward", "Mailer_Type", "Income_Level", "Overdraft_Protection", 
+              "Credit_Rating", "Own_Your_Home")
+
+# Initialize an empty list to store results
+diff_results <- list()
+
+for(var in cat_vars) {
+  # Create a table of counts
+  tab <- table(credit_data_clean[[var]], credit_data_clean$Offer_Accepted)
+  
+  # Convert to percentages
+  prop_tab <- prop.table(tab, margin = 1) * 100
+  
+  # Extract "Yes" percentages
+  yes_percentages <- prop_tab[, "Yes"]
+  
+  # Compute max, min, and difference
+  max_yes <- max(yes_percentages, na.rm = TRUE)
+  min_yes <- min(yes_percentages, na.rm = TRUE)
+  diff_yes <- max_yes - min_yes
+  
+  # Get the categories with max and min acceptance rates
+  max_category <- names(yes_percentages)[which.max(yes_percentages)]
+  min_category <- names(yes_percentages)[which.min(yes_percentages)]
+  
+  # Store results
+  diff_results[[var]] <- data.frame(
+    Variable = var,
+    Max_Yes = round(max_yes, 2),
+    Max_Category = max_category,
+    Min_Yes = round(min_yes, 2),
+    Min_Category = min_category,
+    Difference = round(diff_yes, 2)
+  )
+}
+
+# Combine results into a single table
+final_diff_table <- do.call(rbind, diff_results)
+
+# Print the nicely formatted table
+kable(final_diff_table, caption = "Difference in Offer Accepted Percentages by Category")
+
+
+# Filter data where Offer_Accepted is "Yes"
+accepted_offers <- credit_data_clean %>%
+  filter(Offer_Accepted == "Yes")
+
+# View summary of the new dataset
+summary(accepted_offers)
+
+
+
+
+```
+
+# 
+
+```{r Accecpted Offer Only}
+
+# Convert data to long format for balance over quarters
+accepted_offers_long <- accepted_offers %>%
+  select(Q1_Balance, Q2_Balance, Q3_Balance, Q4_Balance, Income_Level) %>%
+  pivot_longer(cols = starts_with("Q"), names_to = "Quarter", values_to = "Balance")
+
+ggplot(accepted_offers, aes(x = Overdraft_Protection, fill = Overdraft_Protection)) +
+  geom_bar() +
+  theme_minimal() +
+  labs(title = "Distribution of Overdraft Protection", x = "Overdraft Protection", y = "Count")
+
+ggplot(accepted_offers_long, aes(x = Quarter, y = Balance, fill = Quarter)) +
+  geom_violin(trim = FALSE, alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Quarterly Balance Distribution", x = "Quarter", y = "Balance") +
+  scale_fill_brewer(palette = "Pastel1")
+
+ggplot(accepted_offers, aes(x = Reward, fill = Credit_Rating)) +
+  geom_bar(position = "fill") +  # Stacked bars proportionally
+  theme_minimal() +
+  labs(title = "Proportion of Reward Type by Credit Rating", x = "Reward Type", y = "Proportion") +
+  scale_fill_brewer(palette = "Set2")
+
+ggplot(accepted_offers, aes(x = Overdraft_Protection, fill = Credit_Rating)) +
+  geom_bar(position = "fill") +  # Stacked proportionally
+  theme_minimal() +
+  labs(title = "Proportion of Overdraft Protection by Credit Rating", x = "Overdraft Protection", y = "Proportion") +
+  scale_fill_brewer(palette = "Paired")
+
+ggplot(accepted_offers, aes(x = as.factor(Num_Homes_Owned), fill = Credit_Rating)) +
+  geom_bar(position = "fill") +  # Stacked bars proportionally
+  theme_minimal() +
+  labs(title = "Proportion of Number of Homes Owned by Credit Rating", x = "Number of Homes Owned", y = "Proportion") +
+  scale_fill_brewer(palette = "Dark2")
+
+
+```
+
+
+
+```{r both}
+
+# Convert data to long format for balance over quarters
+credit_data_clean_long <- credit_data_clean %>%
+  select(Q1_Balance, Q2_Balance, Q3_Balance, Q4_Balance, Offer_Accepted) %>%
+  pivot_longer(cols = starts_with("Q"), names_to = "Quarter", values_to = "Balance")
+
+# Plot 1: Proportion of Overdraft Protection
+ggplot(credit_data_clean, aes(x = Overdraft_Protection, fill = Offer_Accepted)) +
+  geom_bar(position = "fill") +
+  theme_minimal() +
+  labs(title = "Proportion of Overdraft Protection by Offer Acceptance", 
+       x = "Overdraft Protection", y = "Proportion") +
+  scale_fill_brewer(palette = "Set1")
+
+# Plot 2: Quarterly Balance Distribution
+ggplot(credit_data_clean_long, aes(x = Quarter, y = Balance, fill = Offer_Accepted)) +
+  geom_violin(trim = FALSE, alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Quarterly Balance Distribution by Offer Acceptance", 
+       x = "Quarter", y = "Balance") +
+  scale_fill_brewer(palette = "Pastel1")
+
+# Plot 3: Proportion of Reward Type by Offer Acceptance
+ggplot(credit_data_clean, aes(x = Reward, fill = Offer_Accepted)) +
+  geom_bar(position = "fill") +
+  theme_minimal() +
+  labs(title = "Proportion of Reward Type by Offer Acceptance", 
+       x = "Reward Type", y = "Proportion") +
+  scale_fill_brewer(palette = "Set2")
+
+# Plot 4: Proportion of Overdraft Protection by Offer Acceptance
+ggplot(credit_data_clean, aes(x = Overdraft_Protection, fill = Offer_Accepted)) +
+  geom_bar(position = "fill") +
+  theme_minimal() +
+  labs(title = "Proportion of Overdraft Protection by Offer Acceptance", 
+       x = "Overdraft Protection", y = "Proportion") +
+  scale_fill_brewer(palette = "Paired")
+
+# Plot 5: Proportion of Number of Homes Owned by Offer Acceptance
+ggplot(credit_data_clean, aes(x = as.factor(Num_Homes_Owned), fill = Offer_Accepted)) +
+  geom_bar(position = "fill") +
+  theme_minimal() +
+  labs(title = "Proportion of Number of Homes Owned by Offer Acceptance", 
+       x = "Number of Homes Owned", y = "Proportion") +
+  scale_fill_brewer(palette = "Dark2")
+
+
+```
+
+
+
+
+```{r Logistic Regression}
+
+# Convert Offer_Accepted to binary (1/0)
+credit_data_clean$Offer_Accepted_binary <- as.numeric(as.character(credit_data_clean$Offer_Accepted) == "Yes")
+
+# Check conversion
+table(credit_data_clean$Offer_Accepted, credit_data_clean$Offer_Accepted_binary)
+
+# Create a variable for balance trend (Q4 - Q1)
+credit_data_clean$Balance_Trend <- credit_data_clean$Q4_Balance - credit_data_clean$Q1_Balance
+
+# Create interaction term between Income_Level and Credit_Rating
+credit_data_clean$Income_Credit_Interaction <- interaction(credit_data_clean$Income_Level, credit_data_clean$Credit_Rating)
+
+# Build an enhanced logistic regression model without log transformation
+enhanced_offer_model <- glm(Offer_Accepted_binary ~ Credit_Rating + Income_Level + Reward + 
+                              Num_Credit_Cards_Held + Average_Balance + Balance_Trend + 
+                              Own_Your_Home + Mailer_Type + Overdraft_Protection + 
+                              Num_Bank_Accounts_Open + Household_Size + Income_Credit_Interaction,
+                            family = binomial, 
+                            data = credit_data_clean)
+
+# Display model summary
+summary(enhanced_offer_model)
+
+# Calculate predicted probabilities
+credit_data_clean$predicted_prob_log <- predict(enhanced_offer_model, newdata = credit_data_clean, type = "response")
+
+# Create a dataframe with actual outcomes and predicted probabilities
+pred_data_log <- data.frame(
+  actual = credit_data_clean$Offer_Accepted_binary,
+  predicted = credit_data_clean$predicted_prob_log
+)
+```
+
+#Gains Table and Rank Order Chart
+
+```{r Gains Table and Rank Order Chart}
+library(gains)
+
+gains_table_log <- gains(pred_data_log$actual, pred_data_log$predicted, 
+                         groups = 10)
+gains_table_log
+
+base_rate <- mean(pred_data_log$actual)
+
+
+# Convert gains table to a proper data frame
+gains_df <- data.frame(
+  Decile = 1:length(gains_table_log$cume.pct.of.total),
+  Response_Rate = gains_table_log$mean.resp,
+  Cum_Lift = gains_table_log$cume.lift,
+  Cume_Pct = gains_table_log$cume.pct.of.total
+)
+
+# rank order plot
+rank_order_plot <- ggplot(gains_df, aes(x = Decile)) +
+  geom_line(aes(y = Response_Rate*100, color = "Response Rate"), linewidth = 1) +  # Changed size to linewidth
+  geom_point(aes(y = Response_Rate*100, color = "Response Rate"), size = 3) +
+  geom_hline(yintercept = base_rate*100, linetype = "dashed", color = "black") +
+  scale_color_manual(values = c("Response Rate" = "blue")) +
+  scale_x_continuous(breaks = 1:10) +
+  labs(
+    title = "Rank Order Plot",
+    subtitle = "Response Rate by Decile",
+    x = "Decile",
+    y = "Response Rate (%)",
+    color = ""
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_line(color = "gray95")
+  )
+rank_order_plot
+
+```
+
+## Cumulative Lift Plot and ROC Curve
+
+```{r Cumulative Lift Plot and ROC Curve }
+
+lift_plot <- ggplot(gains_df, aes(x = Decile)) +
+  geom_line(aes(y = Cum_Lift, color = "Cumulative Lift"), linewidth = 1) +  
+  geom_point(aes(y = Cum_Lift, color = "Cumulative Lift"), size = 3) +
+  scale_color_manual(values = c("Cumulative Lift" = "blue")) +
+  scale_x_continuous(breaks = 1:10) +
+  labs(
+    title = "Cumulative Lift Chart",
+    x = "Decile",
+    y = "Lift",
+    color = ""
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_line(color = "gray95")
+  )
+
+lift_plot
+
+# Create prediction object for ROCR
+pred_obj <- prediction(pred_data_log$predicted, pred_data_log$actual)
+
+# Calculate performance metrics for ROC
+perf_roc <- performance(pred_obj, "tpr", "fpr")
+
+# Calculate AUC
+auc <- performance(pred_obj, "auc")@y.values[[1]]
+
+# Create dataframe for ggplot
+roc_df <- data.frame(
+  FPR = perf_roc@x.values[[1]],
+  TPR = perf_roc@y.values[[1]]
+)
+
+# Plot ROC curve
+roc_plot <- ggplot(roc_df, aes(x = FPR, y = TPR)) +
+  geom_line(color = "blue", size = 1) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray") +
+  labs(
+    title = "ROC Curve",
+    subtitle = paste("AUC =", round(auc, 3)),
+    x = "False Positive Rate",
+    y = "True Positive Rate"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_line(color = "gray95")
+  ) +
+  coord_equal()
+
+print(roc_plot)
+
+```
+
+## KOLMOGOROV-SMIRNOV (KS) PLOT
+
+```{r KS Plot}
+# Create performance objects for TPR and FPR
+perf_tpr <- performance(pred_obj, "tpr")
+perf_fpr <- performance(pred_obj, "fpr")
+
+# Get KS statistic and cutoff
+ks_stats <- perf_tpr@y.values[[1]] - perf_fpr@y.values[[1]]
+max_ks <- max(ks_stats)
+max_ks_idx <- which.max(ks_stats)
+cutoff <- perf_tpr@x.values[[1]][max_ks_idx]
+
+# Create data frame for ggplot
+ks_df <- data.frame(
+  Cutoff = perf_tpr@x.values[[1]],
+  TPR = perf_tpr@y.values[[1]],
+  FPR = perf_fpr@y.values[[1]],
+  KS = ks_stats
+)
+
+# Create KS plot with depth of file on x-axis (from 0 to 1)
+# Calculate the depth of file
+ks_df$DepthOfFile <- seq(0, 1, length.out = length(ks_df$Cutoff))
+
+# Find max KS
+max_ks_depth_idx <- which.max(ks_stats)
+max_ks_depth <- ks_df$DepthOfFile[max_ks_depth_idx]
+
+# Create the plot
+ks_plot <- ggplot(ks_df, aes(x = DepthOfFile)) +
+  geom_line(aes(y = TPR, color = "Cumulative % of Acceptors"), size = 1) +
+  geom_line(aes(y = FPR, color = "Cumulative % of Non-Acceptors"), size = 1) +
+  geom_vline(xintercept = max_ks_depth, linetype = "dashed", color = "black") +
+  annotate(
+    "text",
+    x = max_ks_depth - 0.05, 
+    y = ks_df$FPR[max_ks_depth_idx] + 0.03,
+    label = paste("KS =", round(max_ks, 3)),
+    hjust = 1
+  ) +
+  scale_color_manual(
+    values = c("Cumulative % of Acceptors" = "green", "Cumulative % of Non-Acceptors" = "red")
+  ) +
+  labs(
+    title = "Kolmogorov-Smirnov (KS) Plot",
+    subtitle = paste("Maximum KS =", round(max_ks, 3), "at depth =", round(max_ks_depth, 3)),
+    x = "Depth of File (Percentage)",
+    y = "Cumulative Percentage",
+    color = ""
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_line(color = "gray95")
+  ) +
+  coord_cartesian(ylim = c(0, 1))
+
+print(ks_plot)
+
+
+
+
+```
+
+
+
+## Random Forest Modeling
+
+
+```{r  Random Forest Modeling, warning=FALSE}
+
+# Load necessary libraries
+library(randomForest)
+library(caret)
+library(ggplot2)
+library(gains)
+library(DT)
+
+
+# Data Preparation
+
+
+# Convert Offer_Accepted to a factor (Yes/No)
+credit_data_clean$Offer_Accepted <- as.factor(credit_data_clean$Offer_Accepted)
+
+# Split the data into training (80%) and testing (20%)
+set.seed(123)  # For reproducibility
+train_index <- createDataPartition(credit_data_clean$Offer_Accepted, p = 0.8, list = FALSE)
+train_data <- credit_data_clean[train_index, ]
+test_data  <- credit_data_clean[-train_index, ]
+
+
+# Train Random Forest Model
+
+
+rf_model <- randomForest(
+  Offer_Accepted ~ Reward + Mailer_Type + Income_Level + Overdraft_Protection + 
+    Credit_Rating + Num_Credit_Cards_Held + Average_Balance + Q1_Balance + 
+    Q2_Balance + Q3_Balance + Q4_Balance + Own_Your_Home + Household_Size,
+  data = train_data, 
+  ntree = 500,     # Number of trees
+  mtry = 3,        # Number of variables randomly selected at each split
+  importance = TRUE # Enable variable importance calculation
+)
+
+# Print model summary
+print(rf_model)
+
+# Make predictions on the test set
+predicted_probs_rf <- predict(rf_model, newdata = test_data, type = "prob")[, 2]  # Probabilities for "Yes"
+predictions_rf <- predict(rf_model, newdata = test_data)                         # Class predictions
+
+# Confusion Matrix to evaluate performance
+conf_matrix_rf <- confusionMatrix(predictions_rf, test_data$Offer_Accepted)
+print(conf_matrix_rf)
+
+# Calculate accuracy from confusion matrix
+accuracy_rf <- conf_matrix_rf$overall["Accuracy"]
+print(paste("Accuracy:", round(accuracy_rf * 100, 2), "%"))
+
+
+# Feature Importance Visualization
+
+
+varImpPlot(rf_model)
+
+importance_values <- importance(rf_model)
+top_features <- importance_values[order(-importance_values[, "MeanDecreaseAccuracy"]), ][1:5, ]
+
+top_features_df <- data.frame(
+  Feature = rownames(top_features),
+  MeanDecreaseAccuracy = top_features[, "MeanDecreaseAccuracy"]
+)
+
+# List variables with a mean decrease accuracy less than 0
+low_importance_vars <- rownames(importance_values[importance_values[, "MeanDecreaseAccuracy"] < 0, ])
+cat("\nVariables with a Mean Decrease Accuracy less than 0:\n")
+print(low_importance_vars)
+
+# Enhanced ggplot2 visualization for feature importance
+ggplot(top_features_df, aes(x = reorder(Feature, MeanDecreaseAccuracy), y = MeanDecreaseAccuracy)) +
+  geom_bar(stat = "identity", fill = "cadetblue2", width = 0.7) +
+  coord_flip() +
+  labs(
+    title = "Top Features by Importance (Random Forest)",
+    subtitle = "Based on Mean Decrease Accuracy",
+    x = "Features",
+    y = "Mean Decrease Accuracy"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic"),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.text.y = element_text(size = 12),
+    panel.grid.major.x = element_line(color = "gray90"),
+    panel.grid.major.y = element_blank()
+  ) +
+  geom_text(aes(label = round(MeanDecreaseAccuracy, 2)), hjust = 1.3, color = "black", size = 4)
+
+
+# Gains Table and Gains Chart
+
+
+gains_table_rf <- gains(
+  actual = ifelse(test_data$Offer_Accepted == "Yes", 1, 0),
+  predicted = predicted_probs_rf,
+  groups = 10 # Divide data into deciles
+)
+
+print(gains_table_rf)
+
+# Convert gains table to a proper data frame
+gains_rf_df <- data.frame(
+  Decile = 1:length(gains_table_rf$cume.pct.of.total),
+  Response_Rate = gains_table_rf$mean.resp,
+  Cum_Lift = gains_table_rf$cume.lift,
+  Cume_Pct = gains_table_rf$cume.pct.of.total
+)
+
+lift_rf_plot <- ggplot(gains_rf_df, aes(x = Decile)) +
+  geom_line(aes(y = Cum_Lift, color = "Cumulative Lift"), linewidth = 1) +  
+  geom_point(aes(y = Cum_Lift, color = "Cumulative Lift"), size = 3) +
+  scale_color_manual(values = c("Cumulative Lift" = "blue")) +
+  scale_x_continuous(breaks = 1:10) +
+  labs(
+    title = "Cumulative Lift Chart",
+    x = "Decile",
+    y = "Lift",
+    color = ""
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_line(color = "gray95")
+  )
+
+lift_rf_plot
+
+# Rank Order Plot
+rank_order_plot <- ggplot(gains_rf_df, aes(x = Decile)) +
+  geom_line(aes(y = Response_Rate * 100, color = "Response Rate"), linewidth = 1) +
+  geom_point(aes(y = Response_Rate * 100, color = "Response Rate"), size = 3) +
+  geom_hline(yintercept = mean(gains_rf_df$Response_Rate) * 100, linetype = "dashed", color = "black") +
+  scale_color_manual(values = c("Response Rate" = "blue")) +
+  labs(
+    title = "Rank Order Plot",
+    subtitle = "Response Rate by Decile",
+    x = "Decile",
+    y = "Response Rate (%)",
+    color = ""
+  ) +
+  theme_minimal()
+
+print(rank_order_plot)
+
+# ROC Curve and AUC
+pred_obj_rf <- prediction(predicted_probs_rf, ifelse(test_data$Offer_Accepted == "Yes", 1, 0))
+perf_roc_rf <- performance(pred_obj_rf, "tpr", "fpr")
+auc_rf <- performance(pred_obj_rf, "auc")@y.values[[1]]
+
+roc_df_rf <- data.frame(
+  FPR = perf_roc_rf@x.values[[1]],
+  TPR = perf_roc_rf@y.values[[1]]
+)
+
+roc_plot_rf <- ggplot(roc_df_rf, aes(x = FPR, y = TPR)) +
+  geom_line(color = "blue", size = 1) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray") +
+  labs(
+    title = "ROC Curve",
+    subtitle = paste("AUC =", round(auc_rf, 3)),
+    x = "False Positive Rate",
+    y = "True Positive Rate"
+  ) +
+  theme_minimal()
+
+print(roc_plot_rf)
+
+# KS Plot
+perf_tpr_rf <- performance(pred_obj_rf, "tpr")
+perf_fpr_rf <- performance(pred_obj_rf, "fpr")
+
+ks_stats_rf <- perf_tpr_rf@y.values[[1]] - perf_fpr_rf@y.values[[1]]
+max_ks_rf <- max(ks_stats_rf)
+max_ks_idx_rf <- which.max(ks_stats_rf)
+
+ks_df_rf <- data.frame(
+  Cutoff = perf_tpr_rf@x.values[[1]],
+  TPR = perf_tpr_rf@y.values[[1]],
+  FPR = perf_fpr_rf@y.values[[1]],
+  KS = ks_stats_rf
+)
+
+# Create KS plot with depth of file on x-axis (from 0 to 1)
+# Calculate the depth of file
+ks_df_rf$DepthOfFile <- seq(0, 1, length.out = length(ks_df_rf$Cutoff))
+
+# Find max KS
+max_ks_rf_depth_idx <- which.max(ks_stats_rf)
+max_ks_rf_depth <- ks_df_rf$DepthOfFile[max_ks_rf_depth_idx]
+
+
+
+
+# Create the plot
+ks_rf_plot <- ggplot(ks_df_rf, aes(x = DepthOfFile)) +
+  geom_line(aes(y = TPR, color = "Cumulative % of Acceptors"), size = 1) +
+  geom_line(aes(y = FPR, color = "Cumulative % of Non-Acceptors"), size = 1) +
+  geom_vline(xintercept = max_ks_rf_depth, linetype = "dashed", color = "black") +
+  annotate(
+    "text",
+    x = max_ks_rf_depth - 0.05, 
+    y = ks_df_rf$FPR[max_ks_rf_depth_idx] + 0.03,
+    label = paste("KS =", round(max_ks_rf, 3)),
+    hjust = 1
+  ) +
+  scale_color_manual(
+    values = c("Cumulative % of Acceptors" = "green", "Cumulative % of Non-Acceptors" = "red")
+  ) +
+  labs(
+    title = "Kolmogorov-Smirnov (KS) Plot",
+    subtitle = paste("Maximum KS =", round(max_ks_rf, 3), "at depth =", round(max_ks_rf_depth, 3)),
+    x = "Depth of File (Percentage)",
+    y = "Cumulative Percentage",
+    color = ""
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_line(color = "gray95")
+  ) +
+  coord_cartesian(ylim = c(0, 1))
+
+print(ks_rf_plot)
+
+```
+
+
